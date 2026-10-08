@@ -1,6 +1,8 @@
 /* Maren — "Never Miss a Customer" demo chat engine (hotel edition).
    100% client-side. No network calls, no tracking. Works from file:// .
-   Test hooks: ?fast=1 skips delays; window.__maya exposes state + send(). */
+   Leads are persisted to localStorage (simulated owner dashboard).
+   Test hooks: ?fast=1 skips delays; window.__maya exposes state + send();
+   window.__getLeads/__clearLeads expose and reset the persisted leads. */
 (function () {
   'use strict';
 
@@ -242,6 +244,17 @@
     });
   }
 
+  /* Simulated owner dashboard: leads persist in the browser (localStorage).
+     A real client build syncs these to the hotel's CRM / booking system. */
+  var LEAD_KEY = 'nmc_hotel_leads';
+  var leads = [];
+  try { leads = JSON.parse(localStorage.getItem(LEAD_KEY) || '[]'); } catch (e) { leads = []; }
+  function saveLead(l) {
+    l.at = new Date().toISOString(); l.biz = BIZ.name;
+    leads.push(l);
+    try { localStorage.setItem(LEAD_KEY, JSON.stringify(leads)); } catch (e) {}
+  }
+
   /* ---------- intent answers ---------- */
   function roomsHtml() {
     return 'Here\'s what we have &mdash; no resort fees, ever: &#127976;<br><br>' +
@@ -392,11 +405,7 @@
     if (S.step === 2) {
       S.ah.need = (t === 'skip') ? 'General inquiry' : t;
       /* persist the captured lead — the "Saved to your dashboard" card is real */
-      try {
-        var leads = JSON.parse(localStorage.getItem('nmc_hotel_leads') || '[]');
-        leads.push({ name: S.ah.name, phone: S.ah.phone, need: S.ah.need, captured: '11:42 PM (after hours)', at: new Date().toISOString() });
-        localStorage.setItem('nmc_hotel_leads', JSON.stringify(leads));
-      } catch (e) {}
+      saveLead({ name: S.ah.name, phone: S.ah.phone, need: S.ah.need, captured: '11:42 PM (after hours)' });
       S.mode = 'idle'; S.step = 0;
       return sayMany([
         { html: '<b>&#9989; Saved!</b> The morning team will reach out <b>first thing</b> &mdash; late-night inquiries get first pick of available rooms. No need to refresh booking sites till dawn wondering if anyone saw your message.' },
@@ -447,6 +456,8 @@
 
   function reviewStep(text) {
     S.mode = 'idle'; S.step = 0;
+    /* 1-4 star feedback is private — persisted as a lead, like the salon/dental/med-spa standard */
+    saveLead({ name: '(review feedback)', phone: '\u2014', topic: 'Private feedback', details: text.trim(), source: 'review routing' });
     return say('<b>Noted &mdash; truly.</b> Our general manager will personally follow up on this.<br><br>' +
       'We\'d love a second chance to earn those last stars. Can I book you a room for your next visit?',
       [{ label: '&#128197; Book a room' }, { label: 'No thanks', value: 'no thanks' }]);
@@ -547,6 +558,8 @@
       open: openPanel, close: closePanel,
       pickStars: pickStars
     };
+    window.__getLeads = function () { return leads; };
+    window.__clearLeads = function () { leads = []; try { localStorage.removeItem(LEAD_KEY); } catch (e) {} };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
