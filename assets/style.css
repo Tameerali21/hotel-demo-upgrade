@@ -77,6 +77,10 @@ section.block{padding:72px 0}
 .addr-card h3{color:var(--pine-dark); margin-bottom:8px}
 .addr-card p{margin:.3em 0; font-size:15px}
 .addr-card a{color:var(--accent-dark); font-weight:600}
+.call-cta{margin-top:16px; background:var(--pine); color:#fff; box-shadow:0 8px 20px rgba(21,38,32,.30)}
+.call-cta:hover{transform:translateY(-2px); background:var(--pine-dark); color:#fff}
+.call-link{font-weight:700;color:var(--accent-dark);text-decoration:none;border-bottom:2px solid var(--accent)}
+.call-link:hover{border-color:var(--accent-dark)}
 
 /* ---------- captured-leads inbox preview ---------- */
 .inbox-card .btn{margin-top:14px}

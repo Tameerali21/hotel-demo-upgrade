@@ -28,6 +28,11 @@
     document.querySelectorAll('[data-biz="city"]').forEach(function (el) { el.textContent = BIZ.city; });
     document.querySelectorAll('[data-biz="address"]').forEach(function (el) { el.textContent = BIZ.address; });
     document.querySelectorAll('[data-biz="phone"]').forEach(function (el) { el.textContent = BIZ.phone; });
+    /* tap-to-call binding (fleet standard, 2026-10-15): every tel: CTA follows ?phone=,
+       digits-only in the href so an injected param can't smuggle markup/JS. */
+    document.querySelectorAll('#call-cta, a[data-biz="phone"]').forEach(function (el) {
+      el.setAttribute('href', 'tel:' + String(BIZ.phone).replace(/[^+\d]/g, ''));
+    });
     document.querySelectorAll('[data-biz="host"]').forEach(function (el) { el.textContent = BIZ.host; });
     document.querySelectorAll('[data-biz="host-initial"]').forEach(function (el) { el.textContent = BIZ.host.charAt(0); });
     document.title = BIZ.name + ' — ' + BIZ.tagline + ' | ' + BIZ.city;
@@ -232,6 +237,13 @@
 
   function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
+  /* tap-to-call link for chat flows — href bound to ?phone= (digits-only, XSS-safe),
+     display text escaped like everything else. */
+  function callLinkHtml() {
+    var href = 'tel:' + String(BIZ.phone).replace(/[^+\d]/g, '');
+    return '<a class="call-link" href="' + escapeHtml(href) + '">&#128222; Call ' + escapeHtml(BIZ.phone) + '</a>';
+  }
+
   /* word-start keyword match: "parking" must not trigger the "king" room
      keyword, "located" must not trigger the "cat" amenities keyword.
      Prefix keywords like 'reserv'/'schedul'/'availab' still match
@@ -416,7 +428,7 @@
         escapeHtml(S.booking.day) + ' &middot; <b>' + escapeHtml(nights) + ' night' + (nights === '1' ? '' : 's') + '</b><br>Guest: <b>' + escapeHtml(S.booking.name) + '</b><br>' +
         'Reservation: <span class="ref">' + ref + '</span><br><br>';
       if (S.booking.phone) line += 'We\'ll text your reminder. ';
-      line += 'Check-in is at 3 PM &mdash; we\'ll have everything ready. Anything else I can help with?';
+      line += 'Check-in is at 3 PM &mdash; we\'ll have everything ready. Anything else I can help with?<br><br>Prefer to talk it through? ' + callLinkHtml();
       S.mode = 'idle'; S.step = 0;
       return say(line, [{ label: '&#127976; Rooms & rates' }, { label: '&#128220; Policies' }]);
     }
@@ -525,14 +537,14 @@
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
     if (has(t, 'where', 'address', 'location', 'direction', 'find you', 'river walk', 'riverwalk')) {
-      return say('Find us at <b>' + escapeHtml(BIZ.address) + '</b> &mdash; right in the heart of ' + escapeHtml(BIZ.city) + ', with free parking right outside. &#128205;<br><br>Call us anytime: <b>' + escapeHtml(BIZ.phone) + '</b>',
+      return say('Find us at <b>' + escapeHtml(BIZ.address) + '</b> &mdash; right in the heart of ' + escapeHtml(BIZ.city) + ', with free parking right outside. &#128205;<br><br>' + callLinkHtml() + ' &mdash; we&rsquo;re happy to help anytime.',
         [{ label: '&#128197; Book a room' }]);
     }
     if (has(t, 'room', 'rate', 'price', 'cost', 'how much', 'suite', 'king', 'queen', 'deluxe', 'family suite', 'patio room', 'loft')) return say(roomsHtml(), [{ label: '&#128197; Book a room' }]);
     if (has(t, 'amenit', 'pool', 'gym', 'fitness', 'breakfast', 'parking', 'wifi', 'pet', 'dog', 'cat', 'swim')) return say(amenitiesHtml(), [{ label: '&#128197; Book a room' }]);
     if (has(t, 'check-in', 'check in', 'check-out', 'check out', 'checkout', 'checkin', 'cancel', 'refund', 'policy', 'policies', 'late check')) return say(policiesHtml(), [{ label: '&#128197; Book a room' }]);
     if (has(t, 'hour', 'open', 'close', 'when do you', 'front desk')) return say('Our front desk runs <b>7 AM to 10 PM</b> &mdash; and I\'m here <b>24/7</b> for bookings, questions, and late-night check-ins. &#127769;<br><br>Check-in is at 3 PM, check-out at 11 AM. Want me to book your room?', [{ label: '&#128197; Book a room' }]);
-    if (has(t, 'human', 'person', 'real person', 'call you', 'phone number', 'speak to', 'manager')) return say('Of course &mdash; call us at <b>' + escapeHtml(BIZ.phone) + '</b> between 7 AM and 10 PM and a real human picks up. But honestly? I can handle <b>bookings, rates, and policies</b> right here, even at 2 AM. &#128521;', defaultChips());
+    if (has(t, 'human', 'person', 'real person', 'call you', 'phone number', 'speak to', 'manager')) return say('Of course &mdash; ' + callLinkHtml() + ' between 7 AM and 10 PM and a real human picks up. But honestly? I can handle <b>bookings, rates, and policies</b> right here, even at 2 AM. &#128521;', defaultChips());
     if (has(t, 'thank', 'thanks', 'thx', 'great', 'awesome', 'perfect')) return say('Anytime! That\'s what I\'m here for. &#127976;', defaultChips());
     if (has(t, 'bye', 'goodbye', 'see you', 'later')) { S.mode = 'idle'; return say('Safe travels &mdash; see you at ' + escapeHtml(BIZ.name) + '! &#127976;'); }
     if (/\b(hi+|hello|hey+|hola|yo)\b/.test(t) || has(t, 'good morning', 'good evening')) return say('Hey hey! &#128075; What can I do for you &mdash; <b>rooms</b>, <b>rates</b>, or shall I <b>book your stay</b>?', defaultChips());
