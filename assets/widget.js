@@ -92,10 +92,11 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review
+    mode: 'idle',          // idle | booking | afterhours | review | quiz
     step: 0,
     booking: {},
     ah: {},
+    quiz: {},
     lastTopic: null
   };
 
@@ -354,7 +355,8 @@
       { label: '&#127976; Rooms & rates' },
       { label: '&#128197; Book a room' },
       { label: '&#127769; After-hours demo' },
-      { label: '&#11088; Rate your stay' }
+      { label: '&#11088; Rate your stay' },
+      { label: '&#129512; 60-sec room match quiz', value: 'quiz' }
     ];
   }
 
@@ -525,17 +527,101 @@
       [{ label: '&#128197; Book a room' }, { label: 'No thanks', value: 'no thanks' }]);
   }
 
+  /* ---------- 60-second room match quiz (lead-capture pilot, fleet pattern 2026-10-20) ----------
+     HONESTY (hard rule): Maren NEVER invents room numbers, availability, or nightly rates —
+     the quiz promises a handpicked room shortlist + best-rate quote, never a fabricated room. */
+  var QUIZ_OCCASIONS = ['Business trip', 'Family getaway', 'Romantic escape', 'Event / wedding'];
+  var QUIZ_ROOMS = ['Standard', 'Deluxe king', 'Family suite', 'Top-floor suite'];
+
+  function canonChoice(t, options) {
+    var tl = t.toLowerCase();
+    for (var i = 0; i < options.length; i++) {
+      if (tl === options[i].toLowerCase()) return options[i];
+    }
+    return t.trim().slice(0, 60); /* free text accepted, length-capped */
+  }
+
+  function startQuiz() {
+    S.mode = 'quiz'; S.step = 0; S.quiz = {};
+    return say('<b>&#129512; The 60-second room match quiz!</b><br><br>' +
+      'Tell me how you travel and I&rsquo;ll build your <b>room profile</b> &mdash; then Maren will handpick rooms that fit plus a best-rate quote, sent straight to your phone. No spam, no guesswork.<br><br>' +
+      '<b>First: what brings you to ' + escapeHtml(BIZ.name) + '?</b>',
+      QUIZ_OCCASIONS.map(function (o) { return { label: o }; }));
+  }
+
+  function quizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.quiz.occasion = canonChoice(t, QUIZ_OCCASIONS); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.quiz.occasion) + '</b>. &#129512;<br><br><b>When are you thinking of visiting?</b> <i>(e.g. Dec 12&ndash;15)</i>');
+    }
+    if (S.step === 1) {
+      S.quiz.dates = canonChoice(t, []); S.step = 2;
+      return say('<b>' + escapeHtml(S.quiz.dates) + '</b> &mdash; noted. &#129512;<br><br><b>Which room style sounds like you?</b>',
+        QUIZ_ROOMS.map(function (r) { return { label: r }; }));
+    }
+    if (S.step === 2) {
+      S.quiz.style = canonChoice(t, QUIZ_ROOMS); S.step = 3;
+      return say('Love it &mdash; <b>' + escapeHtml(S.quiz.style) + '</b> it is. &#129512;<br><br><b>What&rsquo;s your name</b> for the room profile?');
+    }
+    if (S.step === 3) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the room profile?');
+      }
+      S.quiz.name = t; S.step = 4;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your handpicked rooms to?');
+    }
+    if (S.step === 4) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.quiz.phone = t; S.step = 5;
+      return finishQuiz();
+    }
+  }
+
+  function finishQuiz() {
+    var q = S.quiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Room-match quiz — qualified lead',
+      details: 'Occasion ' + q.occasion + ' · Dates ' + q.dates + ' · Room style ' + q.style,
+      source: 'room quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.quiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#129512;<br><br>Here&rsquo;s your room profile:' },
+      {
+        dash: [
+          ['Occasion', q.occasion],
+          ['Dates', q.dates],
+          ['Room style', q.style]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will handpick rooms that fit + a best-rate quote &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every late-night inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
 
     if (S.mode === 'booking') return bookingStep(text);
     if (S.mode === 'afterhours') return afterHoursStep(text);
+    if (S.mode === 'quiz') return quizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec room match quiz: word-start keywords only ("room for tonight" still hits booking above) */
+    if (has(t, 'quiz', 'room match', 'match me', 'find my room', 'match quiz')) return startQuiz();
     if (has(t, 'where', 'address', 'location', 'direction', 'find you', 'river walk', 'riverwalk')) {
       return say('Find us at <b>' + escapeHtml(BIZ.address) + '</b> &mdash; right in the heart of ' + escapeHtml(BIZ.city) + ', with free parking right outside. &#128205;<br><br>' + callLinkHtml() + ' &mdash; we&rsquo;re happy to help anytime.',
         [{ label: '&#128197; Book a room' }]);
