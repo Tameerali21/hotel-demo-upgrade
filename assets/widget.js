@@ -92,11 +92,12 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz
     step: 0,
     booking: {},
     ah: {},
     quiz: {},
+    eventquiz: {},
     lastTopic: null
   };
 
@@ -356,7 +357,8 @@
       { label: '&#128197; Book a room' },
       { label: '&#127769; After-hours demo' },
       { label: '&#11088; Rate your stay' },
-      { label: '&#129512; 60-sec room match quiz', value: 'quiz' }
+      { label: '&#129512; 60-sec room match quiz', value: 'quiz' },
+      { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' }
     ];
   }
 
@@ -608,6 +610,81 @@
     ]);
   }
 
+  /* ---------- 60-second event & group quiz (fleet second-quiz port, 2026-10-26) ----------
+     The room-match quiz + room booking cover individual stays; this covers the other
+     half of the niche — events and group stays. HONESTY (hard rule): Maren NEVER
+     invents venue capacity, room-block rates, availability, packages, or catering
+     prices — the quiz promises an events-team callback + a group-rate quote ONLY. */
+  var EVENT_TYPES = ['Wedding', 'Conference', 'Family reunion', 'Corporate retreat'];
+  var EVENT_GUESTS = ['Under 20', '20–50', '50–100', '100+'];
+
+  function startEventQuiz() {
+    S.mode = 'eventquiz'; S.step = 0; S.eventquiz = {};
+    return say('<b>&#127881; The 60-second event & group quiz!</b><br><br>' +
+      'Planning something big? Tell me about your event and I&rsquo;ll build your <b>event profile</b> &mdash; then our events team will call you back with a group-rate quote for your dates. No spam, no guesswork.<br><br>' +
+      '<b>First: what kind of event are you planning?</b>',
+      EVENT_TYPES.map(function (o) { return { label: o }; }));
+  }
+
+  function eventQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.eventquiz.event = canonChoice(t, EVENT_TYPES); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.eventquiz.event) + '</b>. &#127881;<br><br><b>How many guests are you expecting?</b>',
+        EVENT_GUESTS.map(function (g) { return { label: g }; }));
+    }
+    if (S.step === 1) {
+      S.eventquiz.guests = canonChoice(t, EVENT_GUESTS); S.step = 2;
+      return say('<b>' + escapeHtml(S.eventquiz.guests) + '</b> guests &mdash; noted. &#127881;<br><br><b>What dates are you looking at?</b> <i>(e.g. June 12&ndash;14)</i>');
+    }
+    if (S.step === 2) {
+      S.eventquiz.dates = canonChoice(t, []); S.step = 3;
+      return say('<b>' + escapeHtml(S.eventquiz.dates) + '</b> &mdash; noted. &#127881;<br><br><b>What&rsquo;s your name</b> for the event profile?');
+    }
+    if (S.step === 3) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the event profile?');
+      }
+      S.eventquiz.name = t; S.step = 4;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> for our events team to reach you?');
+    }
+    if (S.step === 4) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.eventquiz.phone = t; S.step = 5;
+      return finishEventQuiz();
+    }
+  }
+
+  function finishEventQuiz() {
+    var q = S.eventquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Event quiz — qualified lead',
+      details: 'Event ' + q.event + ' · Guests ' + q.guests + ' · Dates ' + q.dates,
+      source: 'event quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.eventquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#127881;<br><br>Here&rsquo;s your event profile:' },
+      {
+        dash: [
+          ['Event', q.event],
+          ['Guests', q.guests],
+          ['Dates', q.dates]
+        ]
+      },
+      {
+        html: 'Our <b>events team</b> will call you back with a group-rate quote for your event. ' +
+          'That&rsquo;s the whole point &mdash; <b>every group inquiry becomes a booked event</b>, not a party lost to the venue down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -615,11 +692,16 @@
     if (S.mode === 'booking') return bookingStep(text);
     if (S.mode === 'afterhours') return afterHoursStep(text);
     if (S.mode === 'quiz') return quizStep(text);
+    if (S.mode === 'eventquiz') return eventQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec event & group quiz BEFORE the room quiz: 'event quiz' / 'group quiz'
+       contain the word 'quiz', so the room-quiz trigger below would hijack them.
+       Bare 'event' alone must NOT start the quiz (an events Q&A stays a Q&A). */
+    if (has(t, 'event quiz', 'group quiz')) return startEventQuiz();
     /* 60-sec room match quiz: word-start keywords only ("room for tonight" still hits booking above) */
     if (has(t, 'quiz', 'room match', 'match me', 'find my room', 'match quiz')) return startQuiz();
     if (has(t, 'where', 'address', 'location', 'direction', 'find you', 'river walk', 'riverwalk')) {
