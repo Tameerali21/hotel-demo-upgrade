@@ -92,12 +92,13 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz
     step: 0,
     booking: {},
     ah: {},
     quiz: {},
     eventquiz: {},
+    prepquiz: {},
     lastTopic: null
   };
 
@@ -358,7 +359,8 @@
       { label: '&#127769; After-hours demo' },
       { label: '&#11088; Rate your stay' },
       { label: '&#129512; 60-sec room match quiz', value: 'quiz' },
-      { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' }
+      { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' },
+      { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' }
     ];
   }
 
@@ -685,6 +687,78 @@
     ]);
   }
 
+  /* ---------- 60-second stay-prep quiz (fleet consult-prep port, 2026-10-30) ----------
+     The room-match quiz covers room choice and the event quiz covers group stays;
+     this covers the stay itself — prior experience + what matters most — so Maren
+     can prep a stay around the guest's priority. HONESTY (hard rule): Maren NEVER
+     invents room numbers, rates, availability, packages, or guarantees — the quiz
+     promises a personalized stay plan built around the visitor's priority + what
+     to have ready for arrival, ONLY. */
+  var PREP_PRIORS = ['First stay with us', 'Stayed before', 'Frequent guest'];
+  var PREP_PRIORITIES = ['Best rate', 'Quiet room', 'Early check-in', 'Family-friendly'];
+
+  function startPrepQuiz() {
+    S.mode = 'prepquiz'; S.step = 0; S.prepquiz = {};
+    return say('<b>&#128203; The 60-second stay-prep quiz!</b><br><br>' +
+      'Tell me about your stay and I&rsquo;ll build your <b>stay-prep profile</b> &mdash; then Maren will build a personalized stay plan around your priority, plus what to have ready for arrival. No spam, no guesswork.<br><br>' +
+      '<b>First: have you stayed with us before?</b>',
+      PREP_PRIORS.map(function (o) { return { label: o }; }));
+  }
+
+  function prepQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.prepquiz.prior = canonChoice(t, PREP_PRIORS); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.prepquiz.prior) + '</b>. &#128203;<br><br><b>What matters most for this stay?</b>',
+        PREP_PRIORITIES.map(function (p) { return { label: p }; }));
+    }
+    if (S.step === 1) {
+      S.prepquiz.priority = canonChoice(t, PREP_PRIORITIES); S.step = 2;
+      return say('<b>' + escapeHtml(S.prepquiz.priority) + '</b> &mdash; noted. &#128203;<br><br><b>What&rsquo;s your name</b> for the stay-prep profile?');
+    }
+    if (S.step === 2) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the stay-prep profile?');
+      }
+      S.prepquiz.name = t; S.step = 3;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your stay plan to?');
+    }
+    if (S.step === 3) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.prepquiz.phone = t; S.step = 4;
+      return finishPrepQuiz();
+    }
+  }
+
+  function finishPrepQuiz() {
+    var q = S.prepquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Stay-prep quiz — qualified lead',
+      details: 'Prior ' + q.prior + ' · Priority ' + q.priority,
+      source: 'stay-prep quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.prepquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#128203;<br><br>Here&rsquo;s your stay-prep profile:' },
+      {
+        dash: [
+          ['Prior', q.prior],
+          ['Priority', q.priority]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will build a personalized stay plan around your priority, plus what to have ready for arrival &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -693,11 +767,17 @@
     if (S.mode === 'afterhours') return afterHoursStep(text);
     if (S.mode === 'quiz') return quizStep(text);
     if (S.mode === 'eventquiz') return eventQuizStep(text);
+    if (S.mode === 'prepquiz') return prepQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec stay-prep quiz BEFORE both other quizzes: 'prep quiz' contains
+       'quiz', so the room-quiz trigger below (and the event-quiz trigger) would
+       hijack it if checked first. Bare 'prep' alone must NOT start the quiz —
+       the trigger requires the full 'prep quiz' phrase. */
+    if (has(t, 'prep quiz')) return startPrepQuiz();
     /* 60-sec event & group quiz BEFORE the room quiz: 'event quiz' / 'group quiz'
        contain the word 'quiz', so the room-quiz trigger below would hijack them.
        Bare 'event' alone must NOT start the quiz (an events Q&A stays a Q&A). */
