@@ -92,13 +92,14 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz
     step: 0,
     booking: {},
     ah: {},
     quiz: {},
     eventquiz: {},
     prepquiz: {},
+    spaquiz: {},
     lastTopic: null
   };
 
@@ -360,7 +361,8 @@
       { label: '&#11088; Rate your stay' },
       { label: '&#129512; 60-sec room match quiz', value: 'quiz' },
       { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' },
-      { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' }
+      { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' },
+      { label: '&#127869; 60-sec spa & dining quiz', value: 'spa quiz' }
     ];
   }
 
@@ -759,6 +761,78 @@
     ]);
   }
 
+  /* ---------- 60-second spa & dining quiz (fleet fourth-quiz port, 2026-11-05) ----------
+     The room-match quiz covers room choice, the event quiz covers group stays, and
+     the stay-prep quiz covers the stay itself; this covers spa & dining — dining
+     style + wellness — so Maren can prep a spa & dining plan around the guest's
+     picks. HONESTY (hard rule): Maren NEVER invents prices, availability, slots
+     held, treatment results, or guarantees — the quiz promises a personalized spa
+     & dining plan built around the visitor's picks + what to book ahead, ONLY. */
+  var SPA_DINING = ['Fine dining', 'Casual bites', 'Room service', 'Local flavors'];
+  var SPA_WELLNESS = ['Spa treatment', 'Pool & sauna', 'Fitness', 'Just relaxing'];
+
+  function startSpaQuiz() {
+    S.mode = 'spaquiz'; S.step = 0; S.spaquiz = {};
+    return say('<b>&#127869; The 60-second spa & dining quiz!</b><br><br>' +
+      'Hungry or ready to unwind? Tell me how you like to eat and relax and I&rsquo;ll build your <b>spa & dining profile</b> &mdash; then Maren will build a personalized spa & dining plan around your picks, plus what to book ahead. No spam, no guesswork.<br><br>' +
+      '<b>First: how do you like to dine with us?</b>',
+      SPA_DINING.map(function (o) { return { label: o }; }));
+  }
+
+  function spaQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.spaquiz.dining = canonChoice(t, SPA_DINING); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.spaquiz.dining) + '</b>. &#127869;<br><br><b>And how do you like to unwind?</b>',
+        SPA_WELLNESS.map(function (p) { return { label: p }; }));
+    }
+    if (S.step === 1) {
+      S.spaquiz.wellness = canonChoice(t, SPA_WELLNESS); S.step = 2;
+      return say('<b>' + escapeHtml(S.spaquiz.wellness) + '</b> &mdash; noted. &#127869;<br><br><b>What&rsquo;s your name</b> for the spa & dining profile?');
+    }
+    if (S.step === 2) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the spa & dining profile?');
+      }
+      S.spaquiz.name = t; S.step = 3;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your spa & dining plan to?');
+    }
+    if (S.step === 3) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.spaquiz.phone = t; S.step = 4;
+      return finishSpaQuiz();
+    }
+  }
+
+  function finishSpaQuiz() {
+    var q = S.spaquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Spa & dining quiz — qualified lead',
+      details: 'Dining ' + q.dining + ' · Wellness ' + q.wellness,
+      source: 'spa quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.spaquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#127869;<br><br>Here&rsquo;s your spa & dining profile:' },
+      {
+        dash: [
+          ['Dining', q.dining],
+          ['Wellness', q.wellness]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will build a personalized spa & dining plan around your picks, plus what to book ahead &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -768,11 +842,17 @@
     if (S.mode === 'quiz') return quizStep(text);
     if (S.mode === 'eventquiz') return eventQuizStep(text);
     if (S.mode === 'prepquiz') return prepQuizStep(text);
+    if (S.mode === 'spaquiz') return spaQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec spa & dining quiz BEFORE the prep quiz (and therefore before event
+       + room): 'spa quiz' contains 'quiz', so the room-quiz trigger below would
+       hijack it if checked first. Bare 'spa' alone must NOT start the quiz —
+       the trigger requires the full 'spa quiz' phrase. */
+    if (has(t, 'spa quiz')) return startSpaQuiz();
     /* 60-sec stay-prep quiz BEFORE both other quizzes: 'prep quiz' contains
        'quiz', so the room-quiz trigger below (and the event-quiz trigger) would
        hijack it if checked first. Bare 'prep' alone must NOT start the quiz —
