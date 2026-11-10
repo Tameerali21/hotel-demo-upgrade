@@ -92,7 +92,7 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz | loyaltyquiz
     step: 0,
     booking: {},
     ah: {},
@@ -100,6 +100,7 @@
     eventquiz: {},
     prepquiz: {},
     spaquiz: {},
+    loyaltyquiz: {},
     lastTopic: null
   };
 
@@ -362,7 +363,8 @@
       { label: '&#129512; 60-sec room match quiz', value: 'quiz' },
       { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' },
       { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' },
-      { label: '&#127869; 60-sec spa & dining quiz', value: 'spa quiz' }
+      { label: '&#127869; 60-sec spa & dining quiz', value: 'spa quiz' },
+      { label: '&#127941; 60-sec loyalty perks quiz', value: 'loyalty quiz' }
     ];
   }
 
@@ -833,6 +835,80 @@
     ]);
   }
 
+  /* ---------- 60-second loyalty perks quiz (fleet fifth-quiz port, 2026-11-10) ----------
+     The room-match quiz covers room choice, the event quiz covers group stays, the
+     stay-prep quiz covers the stay itself, and the spa & dining quiz covers spa &
+     dining; this covers loyalty — perks that matter + stay frequency — so Maren
+     can prep a loyalty plan around the guest's picks. HONESTY (hard rule): Maren
+     NEVER invents rates, room prices, availability, upgrades held, free-night
+     guarantees, or results — the quiz promises a personalized loyalty plan built
+     around the visitor's perks + frequency, with the front desk confirming
+     enrollment and perks on the call, ONLY. */
+  var LOYALTY_PERKS = ['Best rate', 'Room upgrades', 'Free nights', 'Late checkout'];
+  var LOYALTY_FREQUENCY = ['Monthly', 'A few times a year', 'Once a year', 'First stay'];
+
+  function startLoyaltyQuiz() {
+    S.mode = 'loyaltyquiz'; S.step = 0; S.loyaltyquiz = {};
+    return say('<b>&#127941; The 60-second loyalty perks quiz!</b><br><br>' +
+      'Love staying with us? Tell me which perks matter most and how often you stay and I&rsquo;ll build your <b>loyalty profile</b> &mdash; then Maren will build a personalized loyalty plan around your perks and frequency, and the front desk will confirm your enrollment and perks on the call. No spam, no guesswork.<br><br>' +
+      '<b>First: which perks matter most to you?</b>',
+      LOYALTY_PERKS.map(function (o) { return { label: o }; }));
+  }
+
+  function loyaltyQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.loyaltyquiz.perks = canonChoice(t, LOYALTY_PERKS); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.loyaltyquiz.perks) + '</b>. &#127941;<br><br><b>And how often do you stay with us?</b>',
+        LOYALTY_FREQUENCY.map(function (p) { return { label: p }; }));
+    }
+    if (S.step === 1) {
+      S.loyaltyquiz.frequency = canonChoice(t, LOYALTY_FREQUENCY); S.step = 2;
+      return say('<b>' + escapeHtml(S.loyaltyquiz.frequency) + '</b> &mdash; noted. &#127941;<br><br><b>What&rsquo;s your name</b> for the loyalty profile?');
+    }
+    if (S.step === 2) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the loyalty profile?');
+      }
+      S.loyaltyquiz.name = t; S.step = 3;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your loyalty plan to?');
+    }
+    if (S.step === 3) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.loyaltyquiz.phone = t; S.step = 4;
+      return finishLoyaltyQuiz();
+    }
+  }
+
+  function finishLoyaltyQuiz() {
+    var q = S.loyaltyquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Loyalty quiz — qualified lead',
+      details: 'Perks ' + q.perks + ' · Frequency ' + q.frequency,
+      source: 'loyalty quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.loyaltyquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#127941;<br><br>Here&rsquo;s your loyalty profile:' },
+      {
+        dash: [
+          ['Perks', q.perks],
+          ['Frequency', q.frequency]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will build a personalized loyalty plan around your perks and frequency, and the front desk will confirm your enrollment and perks on the call &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -843,11 +919,17 @@
     if (S.mode === 'eventquiz') return eventQuizStep(text);
     if (S.mode === 'prepquiz') return prepQuizStep(text);
     if (S.mode === 'spaquiz') return spaQuizStep(text);
+    if (S.mode === 'loyaltyquiz') return loyaltyQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec loyalty perks quiz FIRST, before spa/prep/event/room: 'loyalty quiz'
+       contains 'quiz', so every quiz trigger below would hijack it if checked
+       first. Bare 'loyalty' / 'rewards' alone must NOT start the quiz — no loyalty
+       info branch exists; the trigger requires the full 'loyalty quiz' phrase. */
+    if (has(t, 'loyalty quiz', 'loyalty perks quiz')) return startLoyaltyQuiz();
     /* 60-sec spa & dining quiz BEFORE the prep quiz (and therefore before event
        + room): 'spa quiz' contains 'quiz', so the room-quiz trigger below would
        hijack it if checked first. Bare 'spa' alone must NOT start the quiz —
