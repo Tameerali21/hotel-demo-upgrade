@@ -92,7 +92,7 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz | loyaltyquiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz | loyaltyquiz | weekendquiz
     step: 0,
     booking: {},
     ah: {},
@@ -101,6 +101,7 @@
     prepquiz: {},
     spaquiz: {},
     loyaltyquiz: {},
+    weekendquiz: {},
     lastTopic: null
   };
 
@@ -364,7 +365,8 @@
       { label: '&#127881; 60-sec event & group quiz', value: 'event quiz' },
       { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' },
       { label: '&#127869; 60-sec spa & dining quiz', value: 'spa quiz' },
-      { label: '&#127941; 60-sec loyalty perks quiz', value: 'loyalty quiz' }
+      { label: '&#127941; 60-sec loyalty perks quiz', value: 'loyalty quiz' },
+      { label: '&#127958; 60-sec weekend getaway quiz', value: 'weekend quiz' }
     ];
   }
 
@@ -909,6 +911,81 @@
     ]);
   }
 
+  /* ---------- 60-second weekend getaway quiz (fleet sixth-quiz port, 2026-11-15) ----------
+     The room-match quiz covers room choice, the event quiz covers group stays, the
+     stay-prep quiz covers the stay itself, the spa & dining quiz covers spa &
+     dining, and the loyalty quiz covers loyalty; this covers the weekend getaway —
+     who's coming + the vibe they want — so Maren can prep a weekend plan around
+     the guest's trip and vibe. HONESTY (hard rule): Maren NEVER invents rates,
+     room prices, availability, rooms held, packages, or guarantees — the quiz
+     promises a personalized weekend getaway plan built around the visitor's trip
+     + vibe, with the front desk confirming the actual room and dates on the
+     call, ONLY. */
+  var WEEKEND_TRIPS = ['Just the two of us', 'Whole family', 'Solo reset', 'Friends trip'];
+  var WEEKEND_VIBES = ['Slow & relaxing', 'Explore the city', 'Pool & spa days', 'Food & nightlife'];
+
+  function startWeekendQuiz() {
+    S.mode = 'weekendquiz'; S.step = 0; S.weekendquiz = {};
+    return say('<b>&#127958; The 60-second weekend getaway quiz!</b><br><br>' +
+      'Weekend coming up? Tell me who&rsquo;s coming and what kind of weekend you want and I&rsquo;ll build your <b>weekend getaway profile</b> &mdash; then Maren will build a personalized weekend getaway plan around your trip and vibe, and the front desk will confirm the actual room and dates on the call. No spam, no guesswork.<br><br>' +
+      '<b>First: who&rsquo;s coming along?</b>',
+      WEEKEND_TRIPS.map(function (o) { return { label: o }; }));
+  }
+
+  function weekendQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.weekendquiz.trip = canonChoice(t, WEEKEND_TRIPS); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.weekendquiz.trip) + '</b>. &#127958;<br><br><b>What kind of weekend are you after?</b>',
+        WEEKEND_VIBES.map(function (p) { return { label: p }; }));
+    }
+    if (S.step === 1) {
+      S.weekendquiz.vibe = canonChoice(t, WEEKEND_VIBES); S.step = 2;
+      return say('<b>' + escapeHtml(S.weekendquiz.vibe) + '</b> &mdash; noted. &#127958;<br><br><b>What&rsquo;s your name</b> for the weekend getaway profile?');
+    }
+    if (S.step === 2) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the weekend getaway profile?');
+      }
+      S.weekendquiz.name = t; S.step = 3;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your weekend getaway plan to?');
+    }
+    if (S.step === 3) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.weekendquiz.phone = t; S.step = 4;
+      return finishWeekendQuiz();
+    }
+  }
+
+  function finishWeekendQuiz() {
+    var q = S.weekendquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Weekend-getaway quiz — qualified lead',
+      details: 'Trip ' + q.trip + ' · Vibe ' + q.vibe,
+      source: 'weekend quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.weekendquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#127958;<br><br>Here&rsquo;s your weekend getaway profile:' },
+      {
+        dash: [
+          ['Trip', q.trip],
+          ['Vibe', q.vibe]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will build a personalized weekend getaway plan around your trip and vibe, and the front desk will confirm the actual room and dates on the call &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -920,12 +997,19 @@
     if (S.mode === 'prepquiz') return prepQuizStep(text);
     if (S.mode === 'spaquiz') return spaQuizStep(text);
     if (S.mode === 'loyaltyquiz') return loyaltyQuizStep(text);
+    if (S.mode === 'weekendquiz') return weekendQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
-    /* 60-sec loyalty perks quiz FIRST, before spa/prep/event/room: 'loyalty quiz'
+    /* 60-sec weekend getaway quiz FIRST, before loyalty/spa/prep/event/room:
+       'weekend quiz' contains 'quiz', so every quiz trigger below would hijack
+       it if checked first. Bare 'weekend' / 'getaway' alone must NOT start the
+       quiz — no weekend info branch exists; the trigger requires the full
+       'weekend quiz' / 'getaway quiz' phrase. */
+    if (has(t, 'weekend quiz', 'getaway quiz')) return startWeekendQuiz();
+    /* 60-sec loyalty perks quiz BEFORE spa/prep/event/room: 'loyalty quiz'
        contains 'quiz', so every quiz trigger below would hijack it if checked
        first. Bare 'loyalty' / 'rewards' alone must NOT start the quiz — no loyalty
        info branch exists; the trigger requires the full 'loyalty quiz' phrase. */
