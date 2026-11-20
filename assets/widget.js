@@ -92,7 +92,7 @@
 
   /* conversation state */
   var S = {
-    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz | loyaltyquiz | weekendquiz
+    mode: 'idle',          // idle | booking | afterhours | review | quiz | eventquiz | prepquiz | spaquiz | loyaltyquiz | weekendquiz | businessquiz
     step: 0,
     booking: {},
     ah: {},
@@ -102,6 +102,7 @@
     spaquiz: {},
     loyaltyquiz: {},
     weekendquiz: {},
+    businessquiz: {},
     lastTopic: null
   };
 
@@ -366,7 +367,8 @@
       { label: '&#128203; 60-sec stay-prep quiz', value: 'prep quiz' },
       { label: '&#127869; 60-sec spa & dining quiz', value: 'spa quiz' },
       { label: '&#127941; 60-sec loyalty perks quiz', value: 'loyalty quiz' },
-      { label: '&#127958; 60-sec weekend getaway quiz', value: 'weekend quiz' }
+      { label: '&#127958; 60-sec weekend getaway quiz', value: 'weekend quiz' },
+      { label: '&#128188; 60-sec business-stay quiz', value: 'business quiz' }
     ];
   }
 
@@ -986,6 +988,82 @@
     ]);
   }
 
+  /* ---------- 60-second business-stay quiz (fleet seventh-quiz port, 2026-11-20) ----------
+     The room-match quiz covers room choice, the event quiz covers group stays, the
+     stay-prep quiz covers the stay itself, the spa & dining quiz covers spa &
+     dining, the loyalty quiz covers loyalty, and the weekend quiz covers weekend
+     getaways; this covers the business stay — trip type + workspace needs — so
+     Maren can prep a business-stay plan around the guest's trip and needs.
+     HONESTY (hard rule): Maren NEVER invents rates, room prices, availability,
+     rooms held, meeting-room prices, or guarantees — the quiz promises a
+     personalized business-stay plan built around the visitor's trip + needs, with
+     the front desk confirming the actual room and workspace setup on the call,
+     ONLY. */
+  var BUSINESS_TRIPS = ['Solo work trip', 'Team offsite', 'Conference or event', 'Extended work stay'];
+  var BUSINESS_NEEDS = ['Fast Wi-Fi & workspace', 'Meeting room', 'Early check-in, late check-out', 'Quiet room for calls'];
+
+  function startBusinessQuiz() {
+    S.mode = 'businessquiz'; S.step = 0; S.businessquiz = {};
+    return say('<b>&#128188; The 60-second business-stay quiz!</b><br><br>' +
+      'Here on business? Tell me about your trip and what you need to get work done and I&rsquo;ll build your <b>business-stay profile</b> &mdash; then Maren will build a personalized business-stay plan around your trip and needs, and the front desk will confirm the actual room and workspace setup on the call. No spam, no guesswork.<br><br>' +
+      '<b>First: what kind of work trip is this?</b>',
+      BUSINESS_TRIPS.map(function (o) { return { label: o }; }));
+  }
+
+  function businessQuizStep(text) {
+    var t = text.trim();
+    if (S.step === 0) {
+      S.businessquiz.trip = canonChoice(t, BUSINESS_TRIPS); S.step = 1;
+      return say('Got it &mdash; <b>' + escapeHtml(S.businessquiz.trip) + '</b>. &#128188;<br><br><b>What do you need to get work done?</b>',
+        BUSINESS_NEEDS.map(function (p) { return { label: p }; }));
+    }
+    if (S.step === 1) {
+      S.businessquiz.needs = canonChoice(t, BUSINESS_NEEDS); S.step = 2;
+      return say('<b>' + escapeHtml(S.businessquiz.needs) + '</b> &mdash; noted. &#128188;<br><br><b>What&rsquo;s your name</b> for the business-stay profile?');
+    }
+    if (S.step === 2) {
+      if (t.length < 2 || t.length > 40) {
+        return say('And your <b>name</b> for the business-stay profile?');
+      }
+      S.businessquiz.name = t; S.step = 3;
+      return say('Thanks, ' + escapeHtml(cap(t.split(' ')[0])) + '! And the best <b>number</b> to send your business-stay plan to?');
+    }
+    if (S.step === 3) {
+      var digits = t.replace(/\D/g, '');
+      if (digits.length < 7) {
+        return say('Hmm, that doesn\'t look like a complete number &mdash; mind double-checking it? <i>(digits only is fine)</i>');
+      }
+      S.businessquiz.phone = t; S.step = 4;
+      return finishBusinessQuiz();
+    }
+  }
+
+  function finishBusinessQuiz() {
+    var q = S.businessquiz;
+    saveLead({
+      name: q.name,
+      phone: q.phone,
+      topic: 'Business-stay quiz — qualified lead',
+      details: 'Trip ' + q.trip + ' · Needs ' + q.needs,
+      source: 'business quiz'
+    });
+    S.mode = 'idle'; S.step = 0; S.businessquiz = {};
+    return sayMany([
+      { html: '<b>&#9989; Quiz complete!</b> &#128188;<br><br>Here&rsquo;s your business-stay profile:' },
+      {
+        dash: [
+          ['Trip', q.trip],
+          ['Needs', q.needs]
+        ]
+      },
+      {
+        html: '<b>Maren</b> will build a personalized business-stay plan around your trip and needs, and the front desk will confirm the actual room and workspace setup on the call &mdash; straight to your phone. ' +
+          'That&rsquo;s the whole point &mdash; <b>every inquiry becomes a booked stay</b>, not a guest lost to the hotel down the street. Anything else I can help with?',
+        chips: defaultChips()
+      }
+    ]);
+  }
+
   /* ---------- main router ---------- */
   function route(text) {
     var t = text.toLowerCase().trim();
@@ -998,14 +1076,42 @@
     if (S.mode === 'spaquiz') return spaQuizStep(text);
     if (S.mode === 'loyaltyquiz') return loyaltyQuizStep(text);
     if (S.mode === 'weekendquiz') return weekendQuizStep(text);
+    if (S.mode === 'businessquiz') return businessQuizStep(text);
     if (S.mode === 'review' && S.step === 1) return reviewStep(text);
 
     if (has(t, 'book', 'reserv', 'schedul', 'room for', 'availab', 'stay tonight')) return startBooking();
     if (has(t, 'after hour', 'after-hour', 'closed', 'late night', 'midnight', '11:42')) return startAfterHours();
     if (has(t, 'review', 'rate', 'stars', 'feedback')) return startReview();
+    /* 60-sec business-stay quiz FIRST, before weekend/loyalty/spa/prep/event/room:
+       'business quiz' contains 'quiz', so the room-quiz word-start 'quiz' match
+       below would hijack it if checked first (the 2026-10-20 'buy' bug class).
+       ROUTER AUDIT (2026-11-20, verified by reading route() + grep): no earlier
+       branch matches 'business quiz' or 'corporate quiz'. Booking keywords are
+       'book','reserv','schedul','room for','availab','stay tonight' — none appear
+       in either phrase (has() is word-start, so 'book' cannot match 'business').
+       After-hours keywords ('after hour','after-hour','closed','late night',
+       'midnight','11:42') and review keywords ('review','rate','stars','feedback')
+       — none match either phrase: 'rate' occurs inside 'corporate' but preceded
+       by 'o', so the word-start has() cannot match it. Bare 'business'/'corporate'
+       reach the graceful fallback: no info branch keyword matches them — rooms
+       ('room','rate','price','cost','how much','suite','king','queen','deluxe',
+       'family suite','patio room','loft'), amenities ('amenit','pool','gym',
+       'fitness','breakfast','parking','wifi','pet','dog','cat','swim'), policies
+       ('check-in','check in','check-out','check out','checkout','checkin',
+       'cancel','refund','policy','policies','late check'), hours ('hour','open',
+       'close','when do you','front desk'), human ('human','person','real person',
+       'call you','phone number','speak to','manager') — none match bare
+       'business' or bare 'corporate' (again 'rate' inside 'corporate' is not
+       word-start). NOTE: QUIZ_OCCASIONS already contains 'Business trip' as a
+       room-quiz Q1 chip — that is a quiz ANSWER consumed by quizStep via mode
+       dispatch, not a router trigger, so it is not a conflict. Bare 'business' /
+       'corporate' alone must NOT start the quiz — the trigger requires the full
+       'business quiz' / 'corporate quiz' phrase. */
+    if (has(t, 'business quiz', 'corporate quiz')) return startBusinessQuiz();
     /* 60-sec weekend getaway quiz FIRST, before loyalty/spa/prep/event/room:
        'weekend quiz' contains 'quiz', so every quiz trigger below would hijack
-       it if checked first. Bare 'weekend' / 'getaway' alone must NOT start the
+       it if checked first. (The business-quiz trigger above sits before this
+       one.) Bare 'weekend' / 'getaway' alone must NOT start the
        quiz — no weekend info branch exists; the trigger requires the full
        'weekend quiz' / 'getaway quiz' phrase. */
     if (has(t, 'weekend quiz', 'getaway quiz')) return startWeekendQuiz();
